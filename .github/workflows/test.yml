@@ -1,4 +1,4 @@
-name: Block on fixup commits
+name: Block on fixup and merge commits
 
 on: pull_request
 
@@ -11,8 +11,6 @@ jobs:
 
     steps:
       - name: Check out Repo
-        uses: actions/checkout@v3.0.2
+        uses: actions/checkout@v3
 
       - uses: ./
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}

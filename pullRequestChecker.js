@@ -21,19 +21,26 @@ class PullRequestChecker {
 
         debug(`${commits.length} commit(s) in the pull request`);
 
-        let blockedCommits = 0;
-        for (const { commit: { message }, sha, url } of commits) {
+        let autosquashCommits = 0;
+        let mergeCommits = 0;
+        for (const { commit: { message }, sha, url, parents } of commits) {
             const isAutosquash = message.startsWith("fixup!") || message.startsWith("squash!");
+            const isMergeCommit = parents.length > 1;
 
             if (isAutosquash) {
                 error(`Commit ${sha} is an autosquash commit: ${url}`);
 
-                blockedCommits++;
+                autosquashCommits++;
+            }
+            if (isMergeCommit) {
+                error(`Commit ${sha} is an merge commit: ${url}`);
+
+                mergeCommits++;
             }
         }
 
-        if (blockedCommits) {
-            throw Error(`${blockedCommits} commit(s) need to be squashed`);
+        if (autosquashCommits || mergeCommits) {
+            throw Error(`PR requires a rebase. Found ${autosquashCommits} commit(s) that need to be squashed and/or ${mergeCommits} merge commits.`);
         }
     }
 }
