@@ -1,27 +1,27 @@
-const { debug, error } = require("@actions/core");
+const { info } = require("@actions/core");
 const {
     context,
     getOctokit,
 } = require("@actions/github");
 
 class PullRequestChecker {
-    constructor(repoToken, checkMerge, checkFixup) {
+    constructor(repoToken, actionMerge, actionFixup) {
         this.client = getOctokit(repoToken);
-        this.checkMerge = checkMerge;
-        this.checkFixup = checkFixup;
+        this.actionMerge = actionMerge;
+        this.actionFixup = actionFixup;
     }
 
     async process() {
-        const commits = await this.client.paginate(
-            "GET /repos/{owner}/{repo}/pulls/{pull_number}/commits",
-            {
-                ...context.repo,
-                pull_number: context.issue.number,
-                per_page: 100,
-            },
-        );
+        const listArgs = {
+            ...context.repo,
+            pull_number: context.issue.number,
+            per_page: 100,
+        };
+        const commits = await this.client.paginate(this.client.rest.pulls.listCommits.endpoint.merge(listArgs));
 
-        debug(`${commits.length} commit(s) in the pull request`);
+        info(`Action for fixup commits: ${this.actionFixup}`);
+        info(`Action for merge commits: ${this.actionMerge}`);
+        info(`${commits.length} commit(s) in the pull request`);
 
         let autosquashCommits = 0;
         let mergeCommits = 0;
@@ -29,26 +29,61 @@ class PullRequestChecker {
             const isAutosquash = message.startsWith("fixup!") || message.startsWith("squash!");
             const isMergeCommit = parents.length > 1;
 
-            if (this.checkFixup && isAutosquash) {
-                error(`Commit ${sha} is an autosquash commit: ${url}`);
+            if (this.actionFixup != "none" && isAutosquash) {
+                info(`Commit ${sha} is an autosquash commit: ${url}`);
 
                 autosquashCommits++;
             }
-            if (this.checkMerge && isMergeCommit) {
-                error(`Commit ${sha} is an merge commit: ${url}`);
+            if (this.actionMerge != "none" && isMergeCommit) {
+                info(`Commit ${sha} is an merge commit: ${url}`);
 
                 mergeCommits++;
             }
         }
-        let errors = []
+        let reviewMessages = [];
+        let failMessages = [];
         if (autosquashCommits) {
-            errors.push(`${autosquashCommits} commit(s) that need to be squashed`);
+            let message = `${autosquashCommits} commit(s) that need to be squashed`;
+            if (this.actionFixup == "request-changes") {
+                reviewMessages.push(message);
+            }
+            if (this.actionFixup == "fail") {
+                failMessages.push(message);
+            }
         }
         if (mergeCommits) {
-            errors.push(`${mergeCommits} merge commits.`);
+            let message = `${mergeCommits} merge commits`;
+            if (this.actionMerge == "request-changes") {
+                reviewMessages.push(message);
+            }
+            if (this.actionMerge == "fail") {
+                failMessages.push(message);
+            }
         }
-        if (errors) {
-            throw Error("PR requires a rebase. Found: " + errors.join(", ") + ".");
+        if (this.actionFixup == "request-changes" || this.actionMerge == "request-changes") {
+            let okMessage = "PR no longer has any merge or fixup commits.";
+            let failPrefix = "PR requires a rebase. Found: ";
+            let state = "APPROVED";
+            let event = "APPROVE";
+            let body = okMessage;
+            if (reviewMessages.length != 0) {
+                state = "CHANGES_REQUESTED";
+                event = "REQUEST_CHANGES";
+                body = failPrefix + reviewMessages.join(", ") + ".";
+            }
+            const reviews = await this.client.paginate(this.client.rest.pulls.listReviews.endpoint.merge(listArgs))
+            const [latest] = reviews.filter((review) => review.user.type === "Bot" && (review.body === okMessage || review.body.startsWith(failPrefix))).slice(-1)
+            if ((!latest && reviewMessages.length != 0) || (latest && latest.state != state)) {
+                this.client.rest.pulls.createReview({
+                    ...context.repo,
+                    pull_number: context.issue.number,
+                    body: body,
+                    event: event,
+                });
+            }
+        }
+        if (failMessages.length != 0) {
+            throw Error("PR requires a rebase. Found: " + failMessages.join(", ") + ".");
         }
     }
 }

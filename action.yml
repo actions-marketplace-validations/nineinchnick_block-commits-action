@@ -10,12 +10,14 @@ inputs:
     description: "Token for the repo. Can be passed in using {{ secrets.GITHUB_TOKEN }}"
     required: true
     default: ${{ github.token }}
-  check-merge:
-    description: 'Check for and block merge commits.'
-    default: true
-  check-fixup:
-    description: 'Check for and block fixup commits.'
-    default: true
+  action-merge:
+    description: 'Action to take when merge commits are found. One of: none, fail, request-changes; defaults to fail.'
+    required: true
+    default: 'fail'
+  action-fixup:
+    description: 'Action to take when fixup commits are found. One of: none, fail, request-changes; defaults to fail.'
+    required: true
+    default: 'fail'
 
 runs:
   using: "docker"

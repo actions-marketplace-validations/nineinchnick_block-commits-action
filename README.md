@@ -12,7 +12,8 @@ messages.
 ## How it works
 
 If any commit message in the pull request has more than one parent, or starts
-with `fixup!` or `squash!` the check status will be set to `error`.
+with `fixup!` or `squash!` the action sets the check status to `error`.
+Instead of failing, the action can be configured to create a review requesting changes.
 
 > Warning:  GitHub's API only returns the first 250 commits of a PR so if you're
 > working on a really large PR your fixup commits might not be detected.
@@ -33,6 +34,9 @@ jobs:
     steps:
       - name: Block Merge or Autosquash Commits
         uses: nineinchnick/block-commits-action@v1
+        with:
+          action-merge: fail
+          action-fixup: request-changes
 ```
 
 You'll also need to add a [required status
