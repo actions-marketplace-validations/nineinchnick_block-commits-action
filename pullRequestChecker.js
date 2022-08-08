@@ -5,8 +5,10 @@ const {
 } = require("@actions/github");
 
 class PullRequestChecker {
-    constructor(repoToken) {
+    constructor(repoToken, checkMerge, checkFixup) {
         this.client = getOctokit(repoToken);
+        this.checkMerge = checkMerge;
+        this.checkFixup = checkFixup;
     }
 
     async process() {
@@ -27,20 +29,26 @@ class PullRequestChecker {
             const isAutosquash = message.startsWith("fixup!") || message.startsWith("squash!");
             const isMergeCommit = parents.length > 1;
 
-            if (isAutosquash) {
+            if (this.checkFixup && isAutosquash) {
                 error(`Commit ${sha} is an autosquash commit: ${url}`);
 
                 autosquashCommits++;
             }
-            if (isMergeCommit) {
+            if (this.checkMerge && isMergeCommit) {
                 error(`Commit ${sha} is an merge commit: ${url}`);
 
                 mergeCommits++;
             }
         }
-
-        if (autosquashCommits || mergeCommits) {
-            throw Error(`PR requires a rebase. Found ${autosquashCommits} commit(s) that need to be squashed and/or ${mergeCommits} merge commits.`);
+        let errors = []
+        if (autosquashCommits) {
+            errors.push(`${autosquashCommits} commit(s) that need to be squashed`);
+        }
+        if (mergeCommits) {
+            errors.push(`${mergeCommits} merge commits.`);
+        }
+        if (errors) {
+            throw Error("PR requires a rebase. Found: " + errors.join(", ") + ".");
         }
     }
 }
