@@ -1,12 +1,15 @@
 const { info } = require("@actions/core");
-const {
-    context,
-    getOctokit,
-} = require("@actions/github");
+const { GitHub } = require("@actions/github/lib/utils");
+const { retry } = require("@octokit/plugin-retry");
+const { context } = require("@actions/github");
 
 class PullRequestChecker {
     constructor(repoToken, actionMerge, actionFixup) {
-        this.client = getOctokit(repoToken);
+        const RetryOctokit = GitHub.plugin(retry);
+        this.client = new RetryOctokit({
+            auth: repoToken,
+            request: { retries: 3 },
+        });
         this.actionMerge = actionMerge;
         this.actionFixup = actionFixup;
     }
@@ -17,7 +20,8 @@ class PullRequestChecker {
             pull_number: context.issue.number,
             per_page: 100,
         };
-        const commits = await this.client.paginate(this.client.rest.pulls.listCommits.endpoint.merge(listArgs));
+        const commitsEndpoint = this.client.rest.pulls.listCommits.endpoint.merge(listArgs);
+        const commits = await this.client.paginate(commitsEndpoint);
 
         info(`Action for fixup commits: ${this.actionFixup}`);
         info(`Action for merge commits: ${this.actionMerge}`);
@@ -26,7 +30,9 @@ class PullRequestChecker {
         let autosquashCommits = 0;
         let mergeCommits = 0;
         for (const { commit: { message }, sha, url, parents } of commits) {
-            const isAutosquash = message.startsWith("fixup!") || message.startsWith("squash!");
+            // https://git-scm.com/docs/git-rebase#Documentation/git-rebase.txt---autosquash
+            const isAutosquash = message.startsWith("fixup!") ||
+                message.startsWith("squash!") || message.startsWith("amend!");
             const isMergeCommit = parents.length > 1;
 
             if (this.actionFixup != "none" && isAutosquash) {
@@ -40,29 +46,28 @@ class PullRequestChecker {
                 mergeCommits++;
             }
         }
-        let reviewMessages = [];
-        let failMessages = [];
-        if (autosquashCommits) {
-            let message = `${autosquashCommits} commit(s) that need to be squashed`;
-            if (this.actionFixup == "request-changes") {
+        const reviewMessages = [];
+        const failMessages = [];
+        if (autosquashCommits != 0) {
+            const message = `${autosquashCommits} commit(s) that need to be squashed`;
+            if (this.actionFixup === "request-changes") {
                 reviewMessages.push(message);
             }
-            if (this.actionFixup == "fail") {
+            if (this.actionFixup === "fail") {
                 failMessages.push(message);
             }
         }
-        if (mergeCommits) {
-            let message = `${mergeCommits} merge commits`;
-            if (this.actionMerge == "request-changes") {
+        if (mergeCommits != 0) {
+            const message = `${mergeCommits} merge commits`;
+            if (this.actionMerge === "request-changes") {
                 reviewMessages.push(message);
-            }
-            if (this.actionMerge == "fail") {
+            } else if (this.actionMerge === "fail") {
                 failMessages.push(message);
             }
         }
-        if (this.actionFixup == "request-changes" || this.actionMerge == "request-changes") {
-            let okMessage = "PR no longer has any merge or fixup commits.";
-            let failPrefix = "PR requires a rebase. Found: ";
+        if (this.actionFixup === "request-changes" || this.actionMerge === "request-changes") {
+            const okMessage = "PR no longer has any merge or fixup commits.";
+            const failPrefix = "PR requires a rebase. Found: ";
             let state = "APPROVED";
             let event = "APPROVE";
             let body = okMessage;
@@ -72,8 +77,11 @@ class PullRequestChecker {
                 body = failPrefix + reviewMessages.join(", ") + ".";
             }
             const reviews = await this.client.paginate(this.client.rest.pulls.listReviews.endpoint.merge(listArgs))
-            const [latest] = reviews.filter((review) => review.user.type === "Bot" && (review.body === okMessage || review.body.startsWith(failPrefix))).slice(-1)
-            if ((!latest && reviewMessages.length != 0) || (latest && latest.state != state)) {
+            const [latest] = reviews.filter((review) => review.user.type === "Bot" &&
+                (review.body === okMessage || review.body.startsWith(failPrefix)))
+                .slice(-1);
+            const hasLatest = typeof latest !== "undefined";
+            if ((!hasLatest && reviewMessages.length != 0) || (hasLatest && latest.state != state)) {
                 this.client.rest.pulls.createReview({
                     ...context.repo,
                     pull_number: context.issue.number,
